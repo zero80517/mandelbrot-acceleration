@@ -121,6 +121,7 @@ void RenderThread::run()
             const int MaxIterations = (1 << (2 * pass + 6)) + 32;
             const int Limit = 4;
             bool allBlack = true;
+            uint* bits = reinterpret_cast<uint *>(image.bits());
 
             #pragma omp parallel for
             for (int y = -halfHeight; y < halfHeight; ++y) {
@@ -129,11 +130,7 @@ void RenderThread::run()
                 if (abort)
                     continue;
 
-                uint *scanLine;
-                #pragma omp critical
-                {
-                    scanLine = reinterpret_cast<uint *>(image.scanLine(y + halfHeight));
-                }
+                uint *scanLine = bits + (y + halfHeight) * (halfWidth * 2);
 
                 double ay = centerY + (y * scaleFactor);
 
@@ -159,9 +156,11 @@ void RenderThread::run()
 
                     if (numIterations < MaxIterations) {
                         *scanLine++ = colormap[numIterations % ColormapSize];
-                        #pragma omp critical
-                        {
-                            allBlack = false;
+                        if (allBlack == true) {
+                            #pragma omp critical
+                            {
+                                allBlack = false;
+                            }
                         }
                     } else {
                         *scanLine++ = qRgb(0, 0, 0);

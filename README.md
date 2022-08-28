@@ -23,3 +23,5 @@ Acceleration of evaluation colors in [Qt mandelbrot example](https://doc.qt.io/q
         scanLine = reinterpret_cast<uint *>(image.scanLine(y + halfHeight));
     }
     ```
+
+    **UPD:** now openmp example is used [bits()](https://doc.qt.io/archives/qt-4.8/qimage.html#bits)  to get pixel data instead of [scanLine()](https://doc.qt.io/archives/qt-4.8/qimage.html#scanLine). But the question is still actual...
