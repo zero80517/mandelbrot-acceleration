@@ -128,7 +128,7 @@ cudaError_t FillMandelbrotWithCuda(uint *const bits, const int halfWidth, const 
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
     }
-    cudaStatus = cudaMemcpy(bits, dev_allBlack, 1 * sizeof(bool), cudaMemcpyDeviceToHost);
+    cudaStatus = cudaMemcpy(allBlack, dev_allBlack, 1 * sizeof(bool), cudaMemcpyDeviceToHost);
     if (cudaStatus != cudaSuccess) {
         fprintf(stderr, "cudaMemcpy failed!");
         goto Error;
