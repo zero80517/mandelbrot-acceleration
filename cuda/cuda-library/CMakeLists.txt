@@ -19,6 +19,7 @@ endif()
 
 add_library(cuda-library SHARED
     cudalibrary_global.h
+    types.h
     cudalibrary.cpp
     cudalibrary.h
     kernel.cu

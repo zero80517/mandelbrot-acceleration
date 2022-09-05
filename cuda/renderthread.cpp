@@ -127,11 +127,22 @@ void RenderThread::run()
                 goto end_fill;
             if (abort)
                 return;
-            CudaLibrary::FillMandelbrot(bits, halfWidth, halfHeight,
-                                        scaleFactor, centerX, centerY,
-                                        Limit, MaxIterations,
-                                        colormap, ColormapSize,
-                                        &allBlack);
+
+            Params params = {
+                halfWidth,
+                halfHeight,
+                scaleFactor,
+                centerX,
+                centerY,
+                Limit,
+                MaxIterations,
+                &allBlack,
+                &restart,
+                &abort
+            };
+
+            CudaLibrary::InitMandelbrot(halfWidth, halfHeight, colormap, ColormapSize);
+            CudaLibrary::FillMandelbrot(bits, (void *)&params);
 end_fill:
             if (allBlack && pass == 0) {
                 pass = 4;

@@ -3,8 +3,6 @@
 
 #include "cudalibrary_global.h"
 
-typedef unsigned int uint;
-
 namespace CudaLibrary
 {
 
@@ -12,11 +10,9 @@ namespace CudaLibrary
 extern "C++" {  // only need to export C++ interface
 #endif
 
-int CUDALIBRARY_EXPORT FillMandelbrot(uint *const bits, const int halfWidth, const int halfHeight,
-                                      const double scaleFactor, const double centerX, const double centerY,
-                                      const int Limit, const int MaxIterations,
-                                      const uint *colormap, const uint ColormapSize,
-                                      bool *const allBlack);
+void CUDALIBRARY_EXPORT InitMandelbrot(const int halfWidth, const int halfHeight,
+                                      const uint *colormap, const uint ColormapSize);
+void CUDALIBRARY_EXPORT FillMandelbrot(uint *const bits, void *params);
 
 #ifdef __cplusplus
 }

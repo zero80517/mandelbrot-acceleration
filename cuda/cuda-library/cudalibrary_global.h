@@ -16,5 +16,6 @@
 #endif
 
 #include "cudalibrary.h"
+#include "types.h"
 
 #endif // CUDALIBRARY_GLOBAL_H

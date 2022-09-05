@@ -3,141 +3,151 @@
 #include "device_launch_parameters.h"
 
 #include <stdio.h>
+
 #include "kernel.cuh"
+#include "types.h"
 
-__global__ void FillMandelbrotKernel(uint *const bits,
-                                     const double scaleFactor, const double centerX, const double centerY,
-                                     const int Limit, const int MaxIterations,
-                                     const uint *colormap, const uint ColormapSize,
-                                     bool *const allBlack)
+uint *dev_bits;
+int size = 0;
+uint *dev_colormap;
+int colormap_size;
+bool *dev_allBlack;
+int *host_progress;
+int *dev_progress;
+bool *host_stop;
+bool *dev_stop;
+
+__global__ void FillMandelbrotKernel(
+    uint *const bits,
+    const int halfWidth, const int halfHeight, const double scaleFactor, const double centerX, const double centerY,
+    const int Limit, const int MaxIterations,
+    const uint *colormap, const uint ColormapSize,
+    bool *const allBlack,
+    int *const progress,
+    bool *const stop
+)
 {
-    int halfWidth = blockDim.x / 2;
-    int halfHeight = gridDim.x / 2;
-    int y = -halfHeight + blockIdx.x;
-    int x = -halfWidth + threadIdx.x;
-    uint *scanLine = bits + (y + halfHeight) * (halfWidth * 2) + (x + halfWidth);
+    int x = -halfWidth + blockDim.x * blockIdx.x + threadIdx.x;
+    int y = -halfHeight + blockDim.y * blockIdx.y + threadIdx.y;
 
-    double ay = centerY + (y * scaleFactor);
+    if (x < halfWidth && y < halfHeight) {
+        uint *scanLine = bits + (y + halfHeight) * (halfWidth * 2) + (x + halfWidth);
 
-    double ax = centerX + (x * scaleFactor);
-    double a1 = ax;
-    double b1 = ay;
-    int numIterations = 0;
+        double ay = centerY + (y * scaleFactor);
 
-    do {
-        ++numIterations;
-        double a2 = (a1 * a1) - (b1 * b1) + ax;
-        double b2 = (2 * a1 * b1) + ay;
-        if ((a2 * a2) + (b2 * b2) > Limit)
-            break;
+        double ax = centerX + (x * scaleFactor);
+        double a1 = ax;
+        double b1 = ay;
+        int numIterations = 0;
 
-        ++numIterations;
-        a1 = (a2 * a2) - (b2 * b2) + ax;
-        b1 = (2 * a2 * b2) + ay;
-        if ((a1 * a1) + (b1 * b1) > Limit)
-            break;
-    } while (numIterations < MaxIterations);
-
-    if (numIterations < MaxIterations) {
-        *scanLine = colormap[numIterations % ColormapSize];
-        if (*allBlack == true) {
-            *allBlack = false;
+        if (!(threadIdx.x || threadIdx.y)) {
+            atomicAdd(progress, 1);
+            __threadfence_system();
         }
-    } else {
-        *scanLine = 0xff000000u;
+
+        do {
+            if (*stop)
+                return;
+
+            ++numIterations;
+            double a2 = (a1 * a1) - (b1 * b1) + ax;
+            double b2 = (2 * a1 * b1) + ay;
+            if ((a2 * a2) + (b2 * b2) > Limit)
+                break;
+
+            ++numIterations;
+            a1 = (a2 * a2) - (b2 * b2) + ax;
+            b1 = (2 * a2 * b2) + ay;
+            if ((a1 * a1) + (b1 * b1) > Limit)
+                break;
+        } while (numIterations < MaxIterations);
+
+        if (numIterations < MaxIterations) {
+            *scanLine = colormap[numIterations % ColormapSize];
+            if (*allBlack == true)
+                *allBlack = false;
+        } else {
+            *scanLine = 0xff000000u;
+        }
     }
 }
 
-// Helper function for using CUDA.
-cudaError_t FillMandelbrotWithCuda(uint *const bits, const int halfWidth, const int halfHeight,
-                                   const double scaleFactor, const double centerX, const double centerY,
-                                   const int Limit, const int MaxIterations,
-                                   const uint *colormap, const uint ColormapSize,
-                                   bool *const allBlack)
+int ceil(int a, int b) noexcept
 {
-    uint *dev_bits = 0;
-    uint *dev_colormap = 0;
-    bool *dev_allBlack = 0;
-    const int size = (halfWidth * 2) * (halfHeight * 2);
-    cudaError_t cudaStatus;
+    return a / b + ((a % b) != 0);
+}
 
-    // Choose which GPU to run on, change this on a multi-GPU system.
-    cudaStatus = cudaSetDevice(0);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-        goto Error;
-    }
+// Helper function for using CUDA.
+void FillMandelbrotWithCuda(uint *const bits, void *params)
+{
+    Params *p = (Params *)params;
 
-    // Allocate GPU buffers for three vectors (two input, one output)    .
-    cudaStatus = cudaMalloc((void**)&dev_bits, size * sizeof(uint));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+    const int &halfWidth = p->halfWidth;
+    const int &halfHeight = p->halfHeight;
+    const double &scaleFactor = p->scaleFactor;
+    const double &centerX = p->centerX;
+    const double &centerY = p->centerY;
+    const int &Limit = p->Limit;
+    const int &MaxIterations = p->MaxIterations;
+    bool *const &allBlack = p->allBlack;
+    bool *const &restart = p->restart;
+    bool *const &abort = p->abort;
 
-    cudaStatus = cudaMalloc((void**)&dev_colormap, ColormapSize * sizeof(uint));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
+    // copy from host memory to to GPU buffer
+    gpuErrchk(cudaMemcpy(dev_allBlack, allBlack, 1 * sizeof(bool), cudaMemcpyHostToDevice));
+    *host_progress = 0;
+    *host_stop = *restart || *abort;
 
-    cudaStatus = cudaMalloc((void**)&dev_allBlack, 1 * sizeof(bool));
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMalloc failed!");
-        goto Error;
-    }
-
-    // Copy input vectors from host memory to GPU buffers.
-    cudaStatus = cudaMemcpy(dev_colormap, colormap, ColormapSize * sizeof(uint), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    cudaStatus = cudaMemcpy(dev_allBlack, allBlack, 1 * sizeof(bool), cudaMemcpyHostToDevice);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-    // Launch a kernel on the GPU with one thread for each element.
-    FillMandelbrotKernel<<<halfHeight * 2, halfWidth * 2>>>(dev_bits,
-                                                            scaleFactor, centerX, centerY,
-                                                            Limit, MaxIterations,
-                                                            dev_colormap, ColormapSize,
-                                                            dev_allBlack);
+    cudaEvent_t start, stop;
+    gpuErrchk(cudaEventCreate(&start)); gpuErrchk(cudaEventCreate(&stop));
+    printf("FillMandelbrotWithCuda starting\n");
+    gpuErrchk(cudaEventRecord(start));
+    const int num_thread_y = 32;
+    const int num_thread_x = 32;
+    const int num_block_y = ceil(2 * halfHeight, num_thread_y);
+    const int num_block_x = ceil(2 * halfWidth, num_thread_x);
+    dim3 block(num_thread_x, num_thread_y);
+    dim3 grid(num_block_x, num_block_y);
+    FillMandelbrotKernel<<<grid, block>>>(
+        dev_bits,
+        halfWidth, halfHeight, scaleFactor, centerX, centerY,
+        Limit, MaxIterations,
+        dev_colormap, colormap_size,
+        dev_allBlack,
+        dev_progress,
+        dev_stop
+    );
+    gpuErrchk(cudaEventRecord(stop));
+    unsigned int num_blocks = num_block_x * num_block_y;
+    float my_progress = 0.0f;
+    printf("Progress:\n"); fflush(stdout);
+    do {
+        if (*restart || *abort) {
+            *host_stop = true;
+            printf("STOP!\n"); fflush(stdout);
+            gpuErrchk(cudaDeviceReset()); // free all memory
+            size = 0;
+            return;
+        }
+        cudaEventQuery(stop); // may help WDDM scenario
+        int progress = *host_progress;
+        float kern_progress = (float)progress/(float)num_blocks;
+        if ((kern_progress - my_progress)> 0.1f) {
+            printf("percent complete = %2.1f\n", (kern_progress*100)); fflush(stdout);
+            my_progress = kern_progress;
+        }
+    } while (my_progress < 0.9f);
+    printf("\n"); fflush(stdout);
+    gpuErrchk(cudaEventSynchronize(stop));
 
     // Check for any errors launching the kernel
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "FillMandelbrotKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-        goto Error;
-    }
+    gpuErrchk(cudaGetLastError());
     
     // cudaDeviceSynchronize waits for the kernel to finish, and returns
     // any errors encountered during the launch.
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching FillMandelbrotKernel!\n", cudaStatus);
-        goto Error;
-    }
+    gpuErrchk(cudaDeviceSynchronize());
 
-    // Copy output vector from GPU buffer to host memory.
-    cudaStatus = cudaMemcpy(bits, dev_bits, size * sizeof(uint), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-    cudaStatus = cudaMemcpy(allBlack, dev_allBlack, 1 * sizeof(bool), cudaMemcpyDeviceToHost);
-    if (cudaStatus != cudaSuccess) {
-        fprintf(stderr, "cudaMemcpy failed!");
-        goto Error;
-    }
-
-Error:
-    cudaFree(dev_bits);
-    cudaFree(dev_colormap);
-    cudaFree(dev_allBlack);
-    
-    return cudaStatus;
+    // Copy output from GPU buffer to host memory.
+    gpuErrchk(cudaMemcpy(bits, dev_bits, size * sizeof(uint), cudaMemcpyDeviceToHost));
+    gpuErrchk(cudaMemcpy(allBlack, dev_allBlack, 1 * sizeof(bool), cudaMemcpyDeviceToHost));
 }
