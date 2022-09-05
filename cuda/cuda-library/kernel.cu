@@ -125,7 +125,7 @@ void FillMandelbrotWithCuda(uint *const bits, void *params)
         if (*restart || *abort) {
             *host_stop = true;
             printf("STOP!\n"); fflush(stdout);
-            gpuErrchk(cudaDeviceReset()); // free all memory
+            gpuErrchk(cudaDeviceReset()); // free all memory, destroy all events
             size = 0;
             return;
         }
@@ -150,4 +150,7 @@ void FillMandelbrotWithCuda(uint *const bits, void *params)
     // Copy output from GPU buffer to host memory.
     gpuErrchk(cudaMemcpy(bits, dev_bits, size * sizeof(uint), cudaMemcpyDeviceToHost));
     gpuErrchk(cudaMemcpy(allBlack, dev_allBlack, 1 * sizeof(bool), cudaMemcpyDeviceToHost));
+
+    // destroy all events
+    gpuErrchk(cudaEventDestroy(start)); gpuErrchk(cudaEventDestroy(stop));
 }
